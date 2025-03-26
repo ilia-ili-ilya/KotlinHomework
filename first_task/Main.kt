@@ -1,105 +1,118 @@
-
 interface Sender {
-    fun send(message: String) : String
+    fun send(message: String): String
 }
 
-class Generator (private val allMaps : Array<MutableMap<String, String>>, private val sender: Sender) {
-
-    fun transformString (s : String, numOfMap : Int) : String {
-        val ans = StringBuilder()
-
-        val replacementPart = StringBuilder()
-        var isReplaceOpen = false
-        var isDollar = false
-        for (c in s) {
-            if (isReplaceOpen) {
-                if (c == '}') {
-                    ans.append(allMaps[numOfMap].getValue(replacementPart.toString()))
-                    isReplaceOpen = false
-                    replacementPart.clear()
-                } else {
-                    replacementPart.append(c)
-                }
-            } else {
-                when (c) {
-                    '$' -> isDollar = true
-                    '{' -> {
-                        isReplaceOpen = isDollar
-                        isDollar = false
-                    }
-                    else -> {
-                        ans.append(c)
-                        isDollar = false
-                    }
+class Generator(private val templates: MutableMap<String, Map<String, String>>, private val sender: Sender) {
+    fun transformString(basicRequest: String, nameOfTemplate: String): String {
+        var finalRequest = basicRequest
+        while (finalRequest.contains("\${")) {
+            var somethingChanged = false
+            for ((key, value) in templates[nameOfTemplate]!!) {
+                if (finalRequest.contains("\${$key}") ) {
+                    finalRequest = finalRequest.replace("\${$key}", value)
+                    somethingChanged = true
                 }
             }
+            if (!somethingChanged) {
+                throw Exception("Something went wrong")
+            }
         }
-        if (isReplaceOpen) {throw Exception("автор $s дурень, она не закрыта")}
-        return ans.toString()
+        return finalRequest
     }
 
-    fun sendRequest (s: String) : String {
+    fun sendRequest(s: String): String {
         return sender.send(s)
     }
 
-    fun sendAllRequest(s: String) : MutableList<String> {
-        val ans = mutableListOf<String>()
-        for (index in allMaps.indices) {
-            val tString = transformString(s, index)
-            ans.add(sendRequest(tString))
+    fun sendAllRequest(basicRequest: String): MutableMap<String, String> {
+        val ansOfAllRequests = mutableMapOf<String, String>()
+        for (templateName in templates.keys) {
+            val textForRequest = transformString(basicRequest, templateName)
+            ansOfAllRequests[templateName] = sendRequest(textForRequest)
         }
-        return ans
+        return ansOfAllRequests
+    }
+
+    fun addNewTemplate(templateName: String, template: Map<String, String>) {
+        templates[templateName] = template
+    }
+
+    fun deleteTemplate(templateName: String) {
+        templates.remove(templateName)
     }
 }
 
 
-class kekSender : Sender {
-    override fun send(message: String) : String {
+class TestSender : Sender {
+    override fun send(message: String): String {
         return "ye, nice string"
     }
 }
 
-fun testSendRequest() : Boolean {
-    val superMap : Array<MutableMap<String, String>> = arrayOf(mutableMapOf(), mutableMapOf(), mutableMapOf())
-    superMap[0]["aa"] = "aaa"
-    superMap[0]["bb"] = "bbb"
-    superMap[1]["a"] = "aaa"
-    superMap[1]["bb"] = "bbb"
-    superMap[2]["aa"] = "\${bb}"
-    superMap[2][""] = "xaxa"
-    superMap[2]["bb"] = "c"
-    val t = kekSender()
-    val g = Generator(superMap, t)
-    var s : String
+fun testOneTransform(
+    generator: Generator,
+    basicRequest: String,
+    templateName: String,
+    expectedValue: String,
+    expectedError: Boolean
+): Boolean {
+    val transformedString: String
     try {
-        s = g.transformString("\${aa}\${bb}aabb", 0)
+        transformedString = generator.transformString(basicRequest, templateName)
     } catch (e: Exception) {
+        return expectedError
+    }
+    if (expectedError) return false
+    return transformedString == expectedValue
+}
+
+fun testTransformString(): Boolean {
+    val superMap = mutableMapOf(
+        "first_test" to mapOf("aa" to "aaa", "bb" to "bbb"),
+        "second_test" to mapOf("a" to "aaa", "bb" to "bbb"),
+        "third_test" to mapOf("aa" to "\${bb}", "" to "xaxa", "bb" to "c")
+    )
+    val sender = TestSender()
+    val generator = Generator(superMap, sender)
+
+    val basicRequest = "\${aa}\${bb}aabb"
+    if (!testOneTransform(generator, basicRequest, "first_test", "aaabbbaabb", false)) {
         return false
     }
-    if (s != "aaabbbaabb") {
+    if (!testOneTransform(generator, basicRequest, "second_test", "", true)) {
         return false
     }
-    var findError = false
-    try {
-        println(g.transformString("\${aa}\${bb}aabb", 1))
-    } catch (e: Exception) {
-        findError = true
-    }
-    if (!findError) {
+    if (!testOneTransform(generator, basicRequest, "third_test", "ccaabb", false)) {
         return false
     }
-    try {
-        s = g.transformString("\${aa}\${bb}aabb", 2)
-    } catch (e: Exception) {
-        return false
-    }
-    return (s == "\${bb}caabb")
+
+    return true
 }
 
 
+fun testAddDelTemplates(): Boolean {
+    val sender = TestSender()
+    val superMap: MutableMap<String, Map<String, String>> = mutableMapOf()
+    val generator = Generator(superMap, sender)
+    generator.addNewTemplate("name1", mutableMapOf("a" to "b"))
+    if (!testOneTransform(generator, "\${a}", "name1", "b", false)) {
+        return false
+    }
+    generator.deleteTemplate("name1")
+    if (!testOneTransform(generator, "\${a}", "name1", "", true)) {
+        return false
+    }
+    return true
+}
+
+fun runAllTests(): Boolean {
+    if (!testTransformString()) return false
+    if (!testAddDelTemplates()) return false
+    return true
+}
 
 fun main() {
-    if (testSendRequest()) {
+    if (runAllTests()) {
         println("all tests passed")
     } else {
         println("something went wrong")
