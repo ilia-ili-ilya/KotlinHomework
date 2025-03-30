@@ -32,7 +32,7 @@ fun RequestSender.sendAll(templates: Map<Uuid, Map<String, String>>, basicReques
         } catch (e: Exception) {
             throw Exception("Test $key is incorrect", e)
         }
-        answer[key] = finalRequest
+        answer[key] = this.send(finalRequest)
     }
     return answer
 }
