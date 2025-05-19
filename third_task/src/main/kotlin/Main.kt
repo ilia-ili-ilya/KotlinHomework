@@ -13,21 +13,21 @@ import javax.swing.SwingUtilities
 import kotlin.concurrent.fixedRateTimer
 import org.apache.commons.math3.linear.*
 import space.kscience.kmath.operations.DoubleField.pow
+import java.net.URI
 
 const val GRAPH_POINTS_COUNT = 6000
 const val GRAPH_POINTS_IN_ONE_SECOND = 100
+const val PRICE_POINTS_COUNT = 50
+const val PERIOD_MS = 1000.toLong()
 const val EPSILON = 1e-6
 
 data class QuadraticCoefficients(val a: Double, val b: Double, val c: Double)
 
 fun getPrice(jsonParser: Json): Double {
-    val url = URL("https://www.deribit.com/api/v2/public/ticker?instrument_name=BTC-PERPETUAL")
+    val url = URI("https://www.deribit.com/api/v2/public/ticker?instrument_name=BTC-PERPETUAL").toURL()
     val connection = url.openConnection() as HttpURLConnection
-    connection.requestMethod = "GET"
-    val responseCode = connection.responseCode
     val inputStream = connection.inputStream
     val response = inputStream.bufferedReader().use { it.readText() }
-    connection.disconnect()
     val result = jsonParser.decodeFromString<Root>(response)
     return result.result.lastPrice
 }
@@ -93,25 +93,21 @@ fun main() {
 
     val wrapper = SwingWrapper(chart)
     val chartPanel = wrapper.displayChart()
-    fixedRateTimer("chartUpdater", initialDelay = 0, period = 1000) {
+    fixedRateTimer("chartUpdater", initialDelay = 0, period = PERIOD_MS) {
 
         data.add(getPrice(jsonParser))
 
-        if (data.size > 50) {
+        if (data.size > PRICE_POINTS_COUNT) {
             data.removeFirst()
         }
 
         val aData = approximation(data)
-        val xData: MutableList<Double> = mutableListOf()
-        val yData: MutableList<Double?> = mutableListOf()
-        for (i in 0 until GRAPH_POINTS_COUNT) {
-            xData.add(i.toDouble() / GRAPH_POINTS_IN_ONE_SECOND)
-            if ((i % GRAPH_POINTS_IN_ONE_SECOND == 0) and (i / GRAPH_POINTS_IN_ONE_SECOND < data.size)) {
-                yData.add(data[i/GRAPH_POINTS_IN_ONE_SECOND])
-            } else {
-                yData.add(null)
-            }
+        val xData = List(GRAPH_POINTS_COUNT) { it.toDouble() / GRAPH_POINTS_IN_ONE_SECOND }
+        val yData = List(GRAPH_POINTS_COUNT) {
+            val idx = it / GRAPH_POINTS_IN_ONE_SECOND
+            if ((it % GRAPH_POINTS_IN_ONE_SECOND == 0) && (idx < data.size)) data[idx] else null
         }
+
         drawPlot(aData, xData, yData, chart, chartPanel)
     }
 }
