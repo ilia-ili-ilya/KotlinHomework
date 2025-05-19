@@ -11,11 +11,16 @@ import org.knowm.xchart.style.markers.SeriesMarkers
 import javax.swing.JFrame
 import javax.swing.SwingUtilities
 import kotlin.concurrent.fixedRateTimer
+import org.apache.commons.math3.linear.*
+import space.kscience.kmath.operations.DoubleField.pow
 
-fun getPrice(time: Int = -1): Double {
-    val jsonParser = Json {
-        ignoreUnknownKeys = true
-    }
+const val GRAPH_POINTS_COUNT = 6000
+const val GRAPH_POINTS_IN_ONE_SECOND = 100
+const val EPSILON = 1e-6
+
+data class QuadraticCoefficients(val a: Double, val b: Double, val c: Double)
+
+fun getPrice(jsonParser: Json): Double {
     val url = URL("https://www.deribit.com/api/v2/public/ticker?instrument_name=BTC-PERPETUAL")
     val connection = url.openConnection() as HttpURLConnection
     connection.requestMethod = "GET"
@@ -24,110 +29,45 @@ fun getPrice(time: Int = -1): Double {
     val response = inputStream.bufferedReader().use { it.readText() }
     connection.disconnect()
     val result = jsonParser.decodeFromString<Root>(response)
-    return result.result.last_price
+    return result.result.lastPrice
 }
 
 fun approximation(data: List<Double>): List<Double> {
-    val aData: MutableList<Double> = mutableListOf()
     val n = data.size
     val y = (0 until n).map { it.toDouble() }
     val (a, b, c) = quadraticApproximation(y, data)
 
-    for (i in 0..5999) {
-        val x = i.toDouble() / 100
-        aData.add(c + b * x + a * x * x)
+    val aData: List<Double> = List(GRAPH_POINTS_COUNT) { i ->
+        val x = i.toDouble() / GRAPH_POINTS_IN_ONE_SECOND
+        c + b * x + a * x * x
     }
     return aData.toList()
 }
 
-
-
-fun quadraticApproximation(x: List<Double>, y: List<Double>): Triple<Double, Double, Double> {
+fun quadraticApproximation(x: List<Double>, y: List<Double>): QuadraticCoefficients {
     val n = x.size
-    var sumX = 0.0
-    var sumX2 = 0.0
-    var sumX3 = 0.0
-    var sumX4 = 0.0
-    var sumY = 0.0
-    var sumXY = 0.0
-    var sumX2Y = 0.0
+    val sumX = x.indices.sumOf { i -> x[i] }
+    val sumX2 = x.indices.sumOf { i -> x[i].pow(2) }
+    val sumX3 = x.indices.sumOf { i -> x[i].pow(3) }
+    val sumX4 = x.indices.sumOf { i -> x[i].pow(4) }
+    val sumY = y.indices.sumOf { i -> y[i] }
+    val sumXY = x.indices.sumOf { i -> x[i] * y[i] }
+    val sumX2Y = x.indices.sumOf { i -> x[i].pow(2) * y[i] }
 
-    for (i in 0 until n) {
-        val xi = x[i]
-        val yi = y[i]
-        val xi2 = xi * xi
-        val xi3 = xi2 * xi
-        val xi4 = xi3 * xi
-        sumX += xi
-        sumX2 += xi2
-        sumX3 += xi3
-        sumX4 += xi4
-        sumY += yi
-        sumXY += xi * yi
-        sumX2Y += xi2 * yi
-    }
-
-    val A = arrayOf(
-        doubleArrayOf(sumX4, sumX3, sumX2),
+    val coefficients = arrayOf(
+        doubleArrayOf(sumX4 + EPSILON, sumX3, sumX2),
         doubleArrayOf(sumX3, sumX2, sumX),
         doubleArrayOf(sumX2, sumX, n.toDouble())
     )
+    val constants = doubleArrayOf(sumX2Y, sumXY, sumY)
+    val matrix = Array2DRowRealMatrix(coefficients)
+    val vector = ArrayRealVector(constants)
+    val solution = LUDecomposition(matrix).solver.solve(vector).toArray()
 
-    val B = doubleArrayOf(sumX2Y, sumXY, sumY)
-
-    val coeffs = solveLinearSystem(A, B)
-    return Triple(coeffs[0], coeffs[1], coeffs[2])
+    return QuadraticCoefficients(solution[0], solution[1], solution[2])
 }
 
-fun solveLinearSystem(A: Array<DoubleArray>, B: DoubleArray): DoubleArray {
-    val n = B.size
-    val augmented = Array(n) { i -> DoubleArray(n + 1) { j -> if (j < n) A[i][j] else B[i] } }
-    for (i in 0 until n) {
-        var maxRow = i
-        for (k in i + 1 until n) {
-            if (Math.abs(augmented[k][i]) > Math.abs(augmented[maxRow][i])) {
-                maxRow = k
-            }
-        }
-
-        val temp = augmented[i]
-        augmented[i] = augmented[maxRow]
-        augmented[maxRow] = temp
-
-        for (k in i + 1 until n) {
-            val factor = augmented[k][i] / augmented[i][i]
-            for (j in i until n + 1) {
-                augmented[k][j] -= factor * augmented[i][j]
-            }
-        }
-    }
-
-    val result = DoubleArray(n)
-    for (i in n - 1 downTo 0) {
-        var sum = augmented[i][n]
-        for (j in i + 1 until n) {
-            sum -= augmented[i][j] * result[j]
-        }
-        result[i] = sum / augmented[i][i]
-    }
-
-    return result
-}
-
-
-
-fun drawPlot(data: List<Double>, chart: XYChart, chartPanel: JFrame) {
-    val aData = approximation(data)
-    val xData: MutableList<Double> = mutableListOf()
-    val yData: MutableList<Double?> = mutableListOf()
-    for (i in 0..5999) {
-        xData.add(i.toDouble() / 100)
-        if ((i % 100 == 0) and (i / 100 < data.size)) {
-            yData.add(data[i/100])
-        } else {
-            yData.add(null)
-        }
-    }
+fun drawPlot(aData: List<Double>, xData: List<Double>, yData: List<Double?>, chart: XYChart, chartPanel: JFrame) {
     SwingUtilities.invokeLater {
         chart.updateXYSeries("Price", xData, yData, null)
         chart.updateXYSeries("Approximation", xData, aData, null)
@@ -136,15 +76,18 @@ fun drawPlot(data: List<Double>, chart: XYChart, chartPanel: JFrame) {
 }
 
 fun main() {
+    val jsonParser = Json {
+        ignoreUnknownKeys = true
+    }
     val chart: XYChart = XYChartBuilder().width(800).height(600).title("Real-time Data").xAxisTitle("Time").yAxisTitle("Value").build()
-    val yData = mutableListOf<Double>()
-    yData.add(getPrice())
+    val data = mutableListOf<Double>()
+    data.add(getPrice(jsonParser))
 
-    val series1 = chart.addSeries("Price", listOf(0.0), yData)
+    val series1 = chart.addSeries("Price", listOf(0.0), data)
     series1.lineStyle = SeriesLines.NONE
     series1.marker = SeriesMarkers.CIRCLE
 
-    val series2 = chart.addSeries("Approximation", listOf(0.0), yData)
+    val series2 = chart.addSeries("Approximation", listOf(0.0), data)
     series2.lineStyle = SeriesLines.SOLID
     series2.marker = SeriesMarkers.NONE
 
@@ -152,14 +95,23 @@ fun main() {
     val chartPanel = wrapper.displayChart()
     fixedRateTimer("chartUpdater", initialDelay = 0, period = 1000) {
 
-        yData.add(getPrice())
+        data.add(getPrice(jsonParser))
 
-        if (yData.size > 50) {
-            yData.removeFirst()
+        if (data.size > 50) {
+            data.removeFirst()
         }
 
-        SwingUtilities.invokeLater {
-            drawPlot(yData, chart, chartPanel)
+        val aData = approximation(data)
+        val xData: MutableList<Double> = mutableListOf()
+        val yData: MutableList<Double?> = mutableListOf()
+        for (i in 0 until GRAPH_POINTS_COUNT) {
+            xData.add(i.toDouble() / GRAPH_POINTS_IN_ONE_SECOND)
+            if ((i % GRAPH_POINTS_IN_ONE_SECOND == 0) and (i / GRAPH_POINTS_IN_ONE_SECOND < data.size)) {
+                yData.add(data[i/GRAPH_POINTS_IN_ONE_SECOND])
+            } else {
+                yData.add(null)
+            }
         }
+        drawPlot(aData, xData, yData, chart, chartPanel)
     }
 }
